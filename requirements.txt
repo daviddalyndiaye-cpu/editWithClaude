@@ -1,0 +1,6 @@
+google-genai
+requests
+python-dotenv
+whisperx
+open-clip-torch
+Pillow
