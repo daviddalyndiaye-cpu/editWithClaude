@@ -1,6 +1,15 @@
+# core
 google-genai
 requests
 python-dotenv
-whisperx
-open-clip-torch
+truststore
 Pillow
+flask
+yt-dlp
+# transcription (pulls PyTorch, large download)
+whisperx
+# talking-head detection - this exact version still ships the face model
+opencv-python-headless==4.10.0.84
+numpy<2.3
+# legacy FFmpeg pipeline (main.py)
+open-clip-torch

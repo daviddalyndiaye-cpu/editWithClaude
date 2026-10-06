@@ -1,78 +1,51 @@
-# Auto B-Roll Video Editor
+# Auto B-Roll Studio
 
-Automatically generates B-roll videos from audio files. Give it a voiceover and it produces a polished video with semantically matching stock footage, crossfade transitions, and the original audio.
+Turn a **voice-over** into an edited faceless YouTube video: real B-roll footage and photos matched to what's being said, jump-cut zooms, light-leak transitions, animated text overlays timed to the speech, sound effects, and website-screenshot cards. Built to be driven by **Claude Code**.
 
-## How it works
+Pipeline: transcribe (WhisperX) → shot plan (Gemini, or Claude in a session) → find footage (Creative-Commons YouTube, Wikimedia, Openverse photos) → **review** → compose (HyperFrames HTML/GSAP) → render in parts → join.
 
-1. **Transcribe** — Uploads audio to Gemini and gets sentence-level timestamps
-2. **Generate queries** — Gemini writes specific Pexels search queries for each segment
-3. **Fetch footage** — Downloads and trims HD stock clips from Pexels
-4. **Composite** — FFmpeg stitches clips with crossfade transitions and attaches audio
+## Setup (Windows 10/11)
 
-## Requirements
+1. Clone the repo, then in PowerShell **inside the repo folder**:
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File setup.ps1
+   ```
+   It installs Python 3.12, FFmpeg and Node.js (via winget) if missing, creates `.venv`, installs Python packages (WhisperX pulls PyTorch, a large download), runs `npm install` for the HyperFrames renderer, downloads its headless Chrome, and creates `.env`.
+2. **Gemini key** (free): get one at https://aistudio.google.com/apikey and paste it into `.env` after `GEMINI_API_KEY=`.
+3. **YouTube cookies** (needed, YouTube blocks anonymous downloads):
+   - In Chrome, install the extension **"Get cookies.txt LOCALLY"**.
+   - Open youtube.com while signed in (a secondary Google account is safer), click the extension → **Export**.
+   - Save the file as `cookies.txt` in the repo root. It is git-ignored — never share or commit it.
+4. **Effects (optional)**: put your own sound effects, light-leak flashes and grid backdrops in `library/` — see `library/README.md`. Without them the tool works, just without SFX/flashes.
+5. Check everything: `.venv\Scripts\python.exe -m studio.preflight`
 
-- Python 3.12+
-- [FFmpeg](https://ffmpeg.org/download.html) installed and on PATH (with NVENC support for GPU encoding)
-- A [Gemini API key](https://aistudio.google.com/apikey)
-- A [Pexels API key](https://www.pexels.com/api/) (free)
+## Make a video
 
-## Setup
-
-```bash
-python -m venv .venv
-.venv\Scripts\Activate.ps1   # Windows PowerShell
-pip install -r requirements.txt
+```powershell
+powershell -ExecutionPolicy Bypass -File start_app.ps1
 ```
+Open **http://localhost:8765**, drop the voice-over (mp3/wav/m4a), pick an accent colour, and follow the live progress bars. A 20-minute voice-over takes roughly: transcription 5–15 min (CPU), footage search ~1 h, render ~1–1.5 h.
 
-Create a `.env` file:
+**Leave "Skip manual review" unticked and let Claude review.** The job pauses at *Your review*; in Claude Code say *"review the job at localhost:8765 and approve it"*. Claude follows `CLAUDE.md`: looks at every contact sheet, replaces bad clips, fills gaps, approves, then checks the final video.
 
-```
-GEMINI_API_KEY=your_key_here
-PEXELS_API_KEY=your_key_here
-```
+The video lands in `projects/<name>/out/<name>.mp4`, with `CREDITS.md` next to it (Creative-Commons clips need credit in your video description).
 
-## Usage
+## Using it with Claude Code
 
-```bash
-# Basic run
-python main.py --input voice.mp3
+Open Claude Code in this folder. `CLAUDE.md` holds the full playbook: the 5-step process, the review checklist, and every known pitfall (YouTube rate limits, Gemini 503s, render size limits). Useful commands Claude uses:
 
-# Fresh run (deletes old temp + output files)
-python main.py --input voice.mp3 --fresh
-```
+| Command | What it does |
+|---|---|
+| `python -m studio.preflight` | checks disk space, cookies, tools, effects |
+| `python -m studio.review sheets <slug>` | contact sheets of every clip → `projects/<slug>/rv_N.jpg` |
+| `python -m studio.review fill <slug> 3,7,12` | fill bad/empty shots with on-topic clips already in the job |
+| `python -m studio.fetch <slug> 3,7,12` | re-search footage for specific shots |
+| `python -m studio.hf_build <slug>` | compose a project into HyperFrames HTML |
 
-Output is saved to `output/final_edited.mp4`.
+## Good to know
 
-## Caching
-
-The app caches intermediate results in `temp/`:
-- Transcription + queries are saved to `segments_cache.json`
-- Downloaded clips are saved as `clip_0.mp4`, `clip_1.mp4`, etc.
-
-If the pipeline crashes mid-run, just re-run the same command — it picks up where it left off. Use `--fresh` to start over completely.
-
-## Configuration
-
-Edit `config.py` to change:
-
-| Setting | Default | Description |
-|---|---|---|
-| `OUTPUT_WIDTH` | 1920 | Video width |
-| `OUTPUT_HEIGHT` | 1080 | Video height |
-| `OUTPUT_FPS` | 30 | Frame rate |
-| `MIN_SEGMENT_DURATION` | 4s | Minimum segment length before merging |
-| `MAX_SEGMENT_DURATION` | 15s | Maximum segment length |
-| `CROSSFADE_DURATION` | 0.5s | Crossfade between clips |
-| `GEMINI_TRANSCRIPTION_MODEL` | gemini-2.5-pro | Model for transcription |
-| `GEMINI_QUERY_MODEL` | gemini-2.5-flash | Model for query generation |
-
-## Project structure
-
-```
-main.py               — CLI entry point, orchestrates the pipeline
-config.py             — Settings, API keys, paths
-transcriber.py        — Gemini audio transcription + sentence merging
-query_generator.py    — Gemini semantic B-roll query generation
-footage_fetcher.py    — Pexels search, download, trim via FFmpeg
-editor.py             — FFmpeg crossfade concatenation + audio muxing
-```
+- **Niche subjects** (a specific boat brand, a small company) have little free footage: expect generic-but-related shots and some repeats. Your own photos fix that.
+- **YouTube rate limits**: the fetcher is deliberately slow (pauses between searches). If you see "Sign in to confirm you're not a bot", re-export `cookies.txt` or wait ~1 hour.
+- **Gemini free tier** is often busy (503) — the tool retries and rotates models automatically.
+- **Licensing**: footage is filtered to Creative-Commons YouTube videos and CC photos; you are still responsible for credits and for checking anything you monetise.
+- The old one-command FFmpeg pipeline (`main.py`, `editor.py`, …) is still here but the web app + `studio/` is the maintained path.

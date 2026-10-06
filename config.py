@@ -3,6 +3,12 @@ import subprocess
 import sys
 from dotenv import load_dotenv
 
+try:  # use the OS certificate store (fixes SSL errors behind proxies/antivirus)
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
+
 load_dotenv()
 
 # API Keys
@@ -18,8 +24,8 @@ if not GEMINI_API_KEY or GEMINI_API_KEY == "your_gemini_api_key_here":
     print("Error: GEMINI_API_KEY not set in .env")
     sys.exit(1)
 if not PEXELS_API_KEY or PEXELS_API_KEY == "your_pexels_api_key_here":
-    print("Error: PEXELS_API_KEY not set in .env")
-    sys.exit(1)
+    print("Warning: PEXELS_API_KEY not set in .env — Pexels source will be skipped")
+    PEXELS_API_KEY = None
 if not EUROPEANA_API_KEY:
     print("Warning: EUROPEANA_API_KEY not set in .env — Europeana source will be skipped")
 if not SERPER_API_KEY and not SERPAPI_KEY:
@@ -27,7 +33,7 @@ if not SERPER_API_KEY and not SERPAPI_KEY:
 
 # Gemini model names
 GEMINI_TRANSCRIPTION_MODEL = "gemini-2.5-pro"
-GEMINI_QUERY_MODEL = "gemini-2.5-flash"
+GEMINI_QUERY_MODEL = "gemini-3.5-flash"
 
 # Video output settings
 OUTPUT_WIDTH = 1920
@@ -84,14 +90,15 @@ VIDEO_ENCODER = _detect_encoder()
 
 # Extra flags needed per encoder (appended to ffmpeg command)
 ENCODER_FLAGS = {
-    "h264_nvenc": [],
-    "libx264": ["-preset", "fast", "-crf", "18"],
+    "h264_nvenc": ["-pix_fmt", "yuv420p"],
+    "libx264": ["-preset", "fast", "-crf", "18", "-pix_fmt", "yuv420p"],
 }
 
 # Footage sources — ordered by priority (first = highest priority)
-# Available: "google", "wikimedia", "europeana", "archive", "vimeo", "pexels"
+# Available: "google", "wikimedia", "europeana", "ytcc", "archive", "vimeo", "pexels"
+# ytcc = YouTube, Creative Commons licensed videos only (via yt-dlp, no key needed)
 # vimeo = Vimeo Creative Commons (modern/industrial content, skipped for archival styles)
-FOOTAGE_SOURCES = ["google", "wikimedia", "europeana", "archive", "vimeo", "pexels"]
+FOOTAGE_SOURCES = ["google", "wikimedia", "europeana", "ytcc", "archive", "vimeo", "pexels"]
 
 # Parallel download settings
 MAX_DOWNLOAD_WORKERS = 3

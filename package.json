@@ -1,0 +1,9 @@
+{
+  "name": "edit-with-claude",
+  "private": true,
+  "description": "Auto B-Roll Studio - HyperFrames renderer dependency",
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "hyperframes": "0.7.111"
+  }
+}

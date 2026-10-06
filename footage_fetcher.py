@@ -104,7 +104,7 @@ def fetch_clip(query: str, duration_needed: float, index: int,
         print(f"[footage_fetcher] Source: {source_used} | query: '{q}' | media: {media}")
 
         # Vimeo URLs are either direct MP4 or tagged HLS — always produce .mp4
-        if source_used == "vimeo" or media_url.startswith("vimeo_hls:"):
+        if source_used in ("vimeo", "ytcc") or media_url.startswith("vimeo_hls:"):
             raw_path = os.path.join(TEMP_DIR, f"raw_{index}_a{attempt}.mp4")
         else:
             ext = os.path.splitext(media_url.split("?")[0].split("#")[0])[1].lower()
@@ -115,7 +115,10 @@ def fetch_clip(query: str, duration_needed: float, index: int,
         downloaded_path = None
         try:
             try:
-                if source_used == "vimeo" or media_url.startswith("vimeo_hls:"):
+                if source_used == "ytcc":
+                    _download_youtube(media_url, raw_path, duration_needed)
+                    downloaded_path = raw_path
+                elif source_used == "vimeo" or media_url.startswith("vimeo_hls:"):
                     _download_vimeo(media_url, raw_path)
                     downloaded_path = raw_path
                 else:
@@ -280,7 +283,7 @@ def _gemini_validates_image(path: str, segment_text: str) -> bool:
             f'Answer "no" only if the image is clearly unrelated.'
         )
         response = _gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.5-flash",
             contents=[
                 types.Part.from_bytes(data=image_bytes, mime_type=mime),
                 prompt,
@@ -337,10 +340,12 @@ def _search_all_sources(query: str, duration_needed: float, media: str,
             tasks.append(("wikimedia", lambda q=query, d=duration_needed, m=media: _search_wikimedia(q, d, m)))
         elif source == "archive":
             tasks.append(("archive", lambda q=query, d=duration_needed, m=media: _search_archive(q, d, m)))
+        elif source == "ytcc" and media == "video":
+            tasks.append(("ytcc", lambda q=query, d=duration_needed: _search_youtube_cc(q, d)))
         elif source == "vimeo" and not archival:
             # Vimeo CC — skip for archival/historical styles (no vintage content there)
             tasks.append(("vimeo", lambda q=query, d=duration_needed: _search_vimeo(q, d)))
-        elif source == "pexels":
+        elif source == "pexels" and PEXELS_API_KEY:
             if media == "image":
                 tasks.append(("pexels", lambda q=query: _search_pexels_photo(q)))
             elif not archival:
@@ -372,6 +377,60 @@ def _search_all_sources(query: str, duration_needed: float, media: str,
             return url, name
 
     return None
+
+
+# ---------------------------------------------------------------------------
+# YouTube (Creative Commons licensed only)
+# ---------------------------------------------------------------------------
+
+_YT_CC_FILTER = "EgIwAQ%253D%253D"  # YouTube search filter: Creative Commons
+
+
+def _search_youtube_cc(query: str, min_duration: float) -> str | None:
+    """Search YouTube restricted to Creative Commons videos. Returns a watch URL."""
+    try:
+        import yt_dlp
+        url = ("https://www.youtube.com/results?search_query="
+               f"{requests.utils.quote(query)}&sp={_YT_CC_FILTER}")
+        opts = {"quiet": True, "no_warnings": True, "extract_flat": True,
+                "playlistend": 10, "skip_download": True}
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+        for entry in (info or {}).get("entries", []):
+            dur = entry.get("duration") or 0
+            if entry.get("id") and min_duration + 2 <= dur <= 1800:
+                watch = f"https://www.youtube.com/watch?v={entry['id']}"
+                try:  # confirm it is actually available and CC-licensed
+                    with yt_dlp.YoutubeDL({"quiet": True, "no_warnings": True}) as ydl:
+                        meta = ydl.extract_info(watch, download=False)
+                except Exception:
+                    continue
+                if "creative commons" not in (meta.get("license") or "").lower():
+                    continue
+                print(f"[ytcc] Found for '{query}': {entry.get('title', '')[:60]}")
+                return watch
+    except Exception as e:
+        print(f"[ytcc] Search failed: {e}")
+    return None
+
+
+def _download_youtube(url: str, dest: str, duration: float):
+    """Download only a short section (starting a few seconds in) of a YouTube video."""
+    import yt_dlp
+    start = 3
+    opts = {
+        "quiet": True, "no_warnings": True,
+        "format": "bv*[height<=1080][ext=mp4]+ba[ext=m4a]/b[height<=1080][ext=mp4]/b",
+        "merge_output_format": "mp4",
+        "outtmpl": dest,
+        "overwrites": True,
+        "download_ranges": yt_dlp.utils.download_range_func(None, [(start, start + duration + 2)]),
+        "force_keyframes_at_cuts": True,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    if not os.path.exists(dest):
+        raise RuntimeError("yt-dlp produced no file")
 
 
 # ---------------------------------------------------------------------------

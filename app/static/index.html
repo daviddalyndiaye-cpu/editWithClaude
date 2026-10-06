@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Auto B-Roll Studio</title>
+<style>
+  :root{--bg:#0b1220;--panel:#121a2b;--panel2:#18223a;--line:#25314d;--tx:#e9eefb;--mut:#8fa0c4;--acc:#f5a524;--ok:#3ddc97;--err:#ff6b6b;--run:#4cc3ff}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 "Segoe UI",system-ui,sans-serif}
+  header{padding:18px 28px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:14px}
+  header h1{font-size:19px;margin:0;letter-spacing:.2px} header span{color:var(--mut);font-size:13px}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--acc);box-shadow:0 0 14px var(--acc)}
+  main{display:grid;grid-template-columns:340px minmax(0,1fr);gap:22px;padding:22px 28px;max-width:1500px;margin:0 auto}
+  @media(max-width:1100px){main{grid-template-columns:minmax(0,1fr)}}
+  section,aside{min-width:0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:18px}
+  h2{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--mut);margin:0 0 12px;font-weight:700}
+  .drop{border:2px dashed var(--line);border-radius:12px;padding:26px 14px;text-align:center;color:var(--mut);cursor:pointer;transition:.15s}
+  .drop.hover,.drop:hover{border-color:var(--acc);color:var(--tx);background:#161f36}
+  .drop b{display:block;color:var(--tx);font-size:16px;margin-bottom:4px}
+  label{display:block;font-size:12px;color:var(--mut);margin:12px 0 4px}
+  input[type=text]{width:100%;padding:9px 11px;border-radius:9px;border:1px solid var(--line);background:var(--panel2);color:var(--tx)}
+  .row{display:flex;gap:10px;align-items:center}
+  .chk{display:flex;gap:8px;align-items:center;font-size:13.5px;color:var(--tx);margin:9px 0}
+  button{font:inherit;cursor:pointer;border:0;border-radius:10px;padding:10px 16px;font-weight:600}
+  .primary{background:var(--acc);color:#1b1200;width:100%;margin-top:14px;padding:12px}
+  .primary:disabled{opacity:.45;cursor:default}
+  .ghost{background:var(--panel2);color:var(--tx);border:1px solid var(--line)}
+  .danger{background:#3a1a22;color:#ff9aa5;border:1px solid #5b2430}
+  .job{padding:11px 12px;border:1px solid var(--line);border-radius:11px;margin-bottom:9px;cursor:pointer;background:var(--panel2)}
+  .job.sel{border-color:var(--acc)} .job .t{font-weight:600} .job .s{font-size:12px;color:var(--mut);display:flex;justify-content:space-between;margin-top:3px}
+  .bar{height:7px;background:#0d1426;border-radius:6px;overflow:hidden} .bar i{display:block;height:100%;background:var(--run);transition:width .6s}
+  .pill{font-size:11px;padding:2px 8px;border-radius:20px;background:#0d1426;border:1px solid var(--line)}
+  .pill.running{color:var(--run)} .pill.done{color:var(--ok)} .pill.error,.pill.cancelled,.pill.interrupted{color:var(--err)} .pill.review{color:var(--acc)}
+  .hero{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+  .hero h3{margin:0;font-size:22px} .big{font-size:34px;font-weight:700;color:var(--acc)}
+  .stages{display:grid;gap:8px;margin-top:16px}
+  .st{display:grid;grid-template-columns:30px minmax(90px,150px) minmax(0,1fr) 56px;align-items:center;gap:12px;padding:9px 12px;border-radius:10px;background:var(--panel2);border:1px solid transparent}
+  .st.running{border-color:#2a4a66} .st.review{border-color:var(--acc)}
+  .st .ic{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:13px;background:#0d1426;color:var(--mut)}
+  .st.done .ic{background:var(--ok);color:#06251a} .st.running .ic{background:var(--run);color:#02202e} .st.error .ic{background:var(--err);color:#2b0000}
+  .st .d{font-size:12px;color:var(--mut);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .st .p{text-align:right;font-variant-numeric:tabular-nums;color:var(--mut);font-size:13px}
+  pre{background:#070c18;border:1px solid var(--line);border-radius:10px;padding:12px;max-height:240px;overflow:auto;font:12px/1.5 Consolas,monospace;color:#9fb2d8;margin:0}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;margin-top:10px}
+  .shot{background:var(--panel2);border:2px solid transparent;border-radius:11px;overflow:hidden;cursor:pointer;position:relative}
+  .shot.sel{border-color:var(--err)} .shot img{width:100%;aspect-ratio:16/9;object-fit:cover;display:block;background:#050913}
+  .shot .m{padding:7px 9px;font-size:12px} .shot .m b{color:var(--tx)} .shot .m div{color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .shot .badge{position:absolute;top:6px;left:6px;background:#000a;padding:1px 7px;border-radius:12px;font-size:11px}
+  .shot .x{position:absolute;top:6px;right:6px;background:var(--err);color:#2b0000;border-radius:12px;font-size:11px;padding:1px 8px;display:none;font-weight:700}
+  .shot.sel .x{display:block}
+  video{width:100%;border-radius:12px;background:#000;max-height:520px}
+  .muted{color:var(--mut)} .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+  .empty{padding:60px 20px;text-align:center;color:var(--mut)}
+  a{color:var(--run)}
+</style>
+</head>
+<body>
+<header><div class="dot"></div><h1>Auto B-Roll Studio</h1><span>voice-over in &rarr; edited video out</span></header>
+<main>
+  <aside>
+    <div class="card">
+      <h2>New video</h2>
+      <div class="drop" id="drop"><b>Drop your voice-over here</b>or click to choose (mp3, wav, m4a)</div>
+      <input type="file" id="file" accept="audio/*,.mp3,.wav,.m4a" hidden />
+      <div id="picked" class="muted" style="margin-top:8px;font-size:13px"></div>
+      <label>Title (optional)</label><input type="text" id="title" placeholder="e.g. Yanmar vs Volvo Penta" />
+      <label>Accent colour</label><div class="row"><input type="color" id="accent" value="#f5a524" style="width:48px;height:34px;border:0;background:none" /><span class="muted" style="font-size:12px">overlays, bars, highlights</span></div>
+      <div class="chk"><input type="checkbox" id="captions" /><span>Burn-in captions (subtitles)</span></div>
+      <div class="chk"><input type="checkbox" id="auto" checked /><span>Skip manual review (recommended: AI checks the footage and it renders straight away)</span></div>
+      <button class="primary" id="go" disabled>Start editing</button>
+    </div>
+    <div class="card" style="margin-top:18px"><h2>Your videos</h2><div id="jobs"><div class="muted">Nothing yet.</div></div></div>
+  </aside>
+  <section id="detail"><div class="card empty">Upload a voice-over to begin. Every stage shows up here live: transcript, shot plan, footage search, your review, render and the finished video.</div></section>
+</main>
+<script>
+const $=s=>document.querySelector(s); let file=null, cur=null, picks=new Set(), lastReviewSig="";
+const W={transcribe:15,plan:5,fetch:20,review:0,build:10,render:45,join:5};
+const drop=$("#drop"), fi=$("#file");
+drop.onclick=()=>fi.click(); fi.onchange=()=>pick(fi.files[0]);
+["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("hover")}));
+["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("hover")}));
+drop.addEventListener("drop",ev=>pick(ev.dataTransfer.files[0]));
+function pick(f){ if(!f)return; file=f; $("#picked").textContent="✔ "+f.name+" ("+(f.size/1e6).toFixed(1)+" MB)"; $("#go").disabled=false; if(!$("#title").value)$("#title").value=f.name.replace(/\.[^.]+$/,""); }
+$("#go").onclick=async()=>{
+  const fd=new FormData(); fd.append("audio",file); fd.append("title",$("#title").value); fd.append("accent",$("#accent").value);
+  if($("#captions").checked)fd.append("captions","on"); if($("#auto").checked)fd.append("auto","on");
+  $("#go").disabled=true; $("#go").textContent="Uploading…";
+  const r=await fetch("/api/upload",{method:"POST",body:fd}); const j=await r.json();
+  $("#go").textContent="Start editing"; $("#go").disabled=false; if(j.id){cur=j.id;picks.clear();refresh();}
+};
+function overall(j){ let t=0; for(const k in W){const s=j.stages[k]; t+=W[k]*((s.status==="done")?1:(s.status==="running"||s.status==="review")?(s.pct||0)/100:0);} return Math.round(t); }
+function fmt(sec){sec=Math.round(sec);return Math.floor(sec/60)+":"+String(sec%60).padStart(2,"0");}
+async function refreshList(){
+  const l=await (await fetch("/api/jobs")).json();
+  $("#jobs").innerHTML=l.length?l.map(j=>`<div class="job ${j.id===cur?"sel":""}" onclick="sel('${j.id}')"><div class="t">${j.title}</div><div class="s"><span class="pill ${j.status}">${j.status}</span><span>${overall(j)}%</span></div><div class="bar" style="margin-top:7px"><i style="width:${overall(j)}%"></i></div></div>`).join(""):'<div class="muted">Nothing yet.</div>';
+  if(!cur&&l.length)cur=l[0].id;
+}
+function sel(id){cur=id;picks.clear();lastReviewSig="";refresh();}
+async function refresh(){
+  await refreshList(); if(!cur)return;
+  const j=await (await fetch("/api/jobs/"+cur)).json(); render(j);
+}
+function render(j){
+  const o=overall(j), ic={done:"✓",running:"●",review:"✋",error:"!",pending:""};
+  let h=`<div class="card"><div class="hero"><div><h3>${j.title}</h3><div class="muted" style="font-size:13px">${j.audio_seconds?fmt(j.audio_seconds)+" voice-over · ":""}<span class="pill ${j.status}">${j.status}</span></div></div><div class="big">${o}%</div></div><div class="bar" style="height:10px"><i style="width:${o}%"></i></div>`;
+  h+='<div class="stages">'+j.order.map(k=>{const s=j.stages[k];const cls=(j.status==="review"&&k==="review")?"review":s.status;
+    return `<div class="st ${cls}"><div class="ic">${ic[cls]||""}</div><div><b>${s.label}</b></div><div><div class="bar"><i style="width:${s.status==="done"?100:(s.pct||0)}%"></i></div><div class="d">${s.detail||""}</div></div><div class="p">${s.status==="done"?"done":s.status==="pending"?"":(s.pct||0)+"%"}</div></div>`}).join("")+"</div>";
+  h+='<div class="actions">';
+  if(["running","queued","review"].includes(j.status))h+=`<button class="danger" onclick="act('cancel')">Cancel</button>`;
+  if(["interrupted","error","cancelled"].includes(j.status))h+=`<button class="ghost" onclick="act('resume')">Resume</button>`;
+  h+="</div></div>";
+  if(j.video){h+=`<div class="card" style="margin-top:18px"><h2>Finished video</h2><video controls src="/media/${j.video}"></video><div class="actions"><a href="/media/${j.video}" download><button class="primary" style="width:auto;margin:0">Download video</button></a><a href="/media/${j.slug}/CREDITS.md" target="_blank"><button class="ghost">Credits (Creative Commons)</button></a></div></div>`;}
+  h+=`<div id="review"></div><div class="card" style="margin-top:18px"><h2>Live log</h2><pre id="log">${(j.log||[]).join("\n").replace(/</g,"&lt;")}</pre></div>`;
+  const pre=$("#log"); const stick=!pre||pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30;
+  const keep=$("#review")?$("#review").innerHTML:""; $("#detail").innerHTML=h; if($("#review"))$("#review").innerHTML=keep;
+  const p2=$("#log"); if(p2)p2.scrollTop=p2.scrollHeight;
+  const st=j.stages; if(j.status==="review"||(st.fetch.status==="done"&&["review","build","render","join"].includes(j.stage)&&!j.video))loadShots(j,j.status==="review");
+}
+async function loadShots(j,interactive){
+  const sh=await (await fetch("/api/jobs/"+j.id+"/shots")).json(); const sig=interactive+":"+sh.map(s=>s.id+(s.thumb||"")+(s.title||"")).join("|");
+  if(sig===lastReviewSig&&$("#review").innerHTML)return; lastReviewSig=sig;
+  let h=`<div class="card" style="margin-top:18px"><h2>${interactive?"Review the footage":"Footage used"} · ${sh.length} shots</h2>`;
+  if(interactive)h+=`<div class="muted" style="font-size:13px">Click any clip that doesn't match the narration, then <b>Replace selected</b>. Happy? Approve and it renders.</div><div class="actions"><button class="primary" style="width:auto;margin:0" onclick="act('approve')">Approve &amp; render</button><button class="ghost" onclick="replaceSel()">Replace selected (<span id="nsel">${picks.size}</span>)</button></div>`;
+  h+='<div class="grid">'+sh.map(s=>`<div class="shot ${picks.has(s.id)?"sel":""}" ${interactive?`onclick="toggle(${s.id},this)"`:""}>${s.thumb?`<img loading="lazy" src="/media/${s.thumb}?v=${encodeURIComponent(s.title||"")}">`:`<img alt="">`}<span class="badge">#${s.id} · ${fmt(s.start)}</span><span class="x">replace</span><div class="m"><b>${(s.title||"—").slice(0,40)}</b><div>wanted: ${(s.must_show||"").slice(0,44)}</div>${s.overlays.length?`<div>text: ${s.overlays.join(" · ").slice(0,44)}</div>`:""}</div></div>`).join("")+"</div></div>";
+  $("#review").innerHTML=h;
+}
+function toggle(id,el){picks.has(id)?picks.delete(id):picks.add(id);el.classList.toggle("sel");const n=$("#nsel");if(n)n.textContent=picks.size;}
+async function replaceSel(){ if(!picks.size)return alert("Click the clips you want replaced first."); await fetch(`/api/jobs/${cur}/replace`,{method:"POST",body:JSON.stringify({ids:[...picks]})}); picks.clear(); lastReviewSig=""; setTimeout(refresh,600); }
+async function act(a){ await fetch(`/api/jobs/${cur}/${a}`,{method:"POST"}); lastReviewSig=""; setTimeout(refresh,500); }
+refresh(); setInterval(refresh,2500);
+</script>
+</body>
+</html>

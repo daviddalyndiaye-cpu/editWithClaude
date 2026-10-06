@@ -1,10 +1,32 @@
+# secrets - never commit
 .env
-__pycache__/
-*.pyc
+cookies.txt
+
+# your videos, media, renders
+projects/
+temp/
+output/
 *.mp3
 *.mp4
 *.wav
 *.m4a
-temp/
-output/
+*.mov
+*.jpg
+*.png
+!app/static/*.png
+
+# asset packs (licensed - add your own, see library/README.md)
+library/*/*
+!library/README.md
+library/pack_raw/
+
+# environments, deps, logs
 .venv/
+node_modules/
+__pycache__/
+*.pyc
+*.log
+*.err
+pull_pack.py
+run_parts.ps1
+hf_probe/
