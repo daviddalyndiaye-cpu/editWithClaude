@@ -13,8 +13,9 @@ T = 0.42  # transition length (s); the incoming clip is fully in exactly at the 
 _LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library")
 SFX_DIR = os.path.join(_LIB, "sfx")
 BG_DIR = os.path.join(_LIB, "bg")                 # looping backdrops (grid-dots / grid-warp / topo)
+ICON_DIR = os.path.join(_LIB, "icons")             # stickers + icons.json (trigger words), see tools/import_icons.py
 FX_DIR = os.path.join(_LIB, "fx")                 # burn-XX.mp4: 0.32 s film-burn / light-leak flashes (screen blend)
-SFX_VOL = {"money": 0.22}
+SFX_VOL = {"money": 0.22, "riser": 0.16, "type": 0.20, "pop": 0.32, "burn": 0.30, "film": 0.30, "glitch": 0.26, "wipe": 0.40, "tv": 0.22}
 MONEY_RE = re.compile(r"[$€£]|cost|price|revenue|sales|billion|million|euro|dollar|sek|usd|profit|margin", re.I)
 FONT_DISPLAY = "'Montserrat','Arial Black',sans-serif"
 FONT_TEXT = "'Inter','Segoe UI',Arial,sans-serif"
@@ -38,6 +39,51 @@ class Words:
             if x["s"] >= after - 0.01 and x["w"].lower().strip(".,!?'\"").startswith(term):
                 return x["s"]
         return None
+
+
+def auto_icons(shots, words, reg, gap=12.0):
+    """Pop a sticker when the narrator says one of its trigger words (library/icons/icons.json).
+    At most one every `gap` s, never on cards / screenshot cards / over another overlay, no sticker repeated within 5."""
+    try:
+        index = json.load(open(os.path.join(ICON_DIR, "icons.json")))
+    except Exception:
+        return 0
+    single, phrases = {}, []
+    for it in index:
+        for w in it["words"]:
+            (phrases.append((w.lower().split(), it["file"])) if " " in w else single.setdefault(w.lower(), it["file"]))
+    def match(i):
+        for ph, f in phrases:
+            if [x["w"].lower().strip(".,!?'\"") for x in words[i:i + len(ph)]] == ph:
+                return f
+        t = words[i]["w"].lower().strip(".,!?'\"")
+        if t in single:
+            return single[t]
+        for k, f in single.items():
+            if k.endswith("*") and t.startswith(k[:-1]) and len(t) >= len(k) - 1:
+                return f
+        return None
+    last_t, recent, n = -1e9, [], 0
+    si = 0
+    for i, x in enumerate(words):
+        t = x["s"]
+        while si + 1 < len(shots) and shots[si + 1]["start"] <= t:
+            si += 1
+        s = shots[si]
+        if t - last_t < gap or t < 2.0 or t > s["end"] - 1.6:
+            continue
+        r = reg.get(str(s["id"]), {})
+        if s["kind"] == "card" or not r.get("file") or r.get("platform") == "web" or s.get("layout") == "inset":
+            continue
+        busy = any(abs((s["start"] + o.get("at", 0.8)) - t) < o.get("dur", 3.2) + 0.5 for o in s.get("overlays", []) if o["type"] != "icon")
+        if busy:
+            continue
+        f = match(i)
+        if not f or f in recent:
+            continue
+        s.setdefault("overlays", []).append({"type": "icon", "file": f, "at": t - s["start"], "dur": 2.4})
+        last_t = t; recent = (recent + [f])[-5:]; n += 1
+    return n
 
 
 def motion_js(sel, kind, start, dur):
@@ -109,11 +155,42 @@ def build(slug):
     vjobs = []                # (source, normalised destination)
     els, js = [], []          # DOM elements in z-order, timeline statements
     sfx_marks = []            # (time, family)
-    burns = sorted(x for x in os.listdir(FX_DIR) if x.startswith("burn-")) if os.path.isdir(FX_DIR) else []
+    fx = sorted(os.listdir(FX_DIR)) if os.path.isdir(FX_DIR) else []
+    leaks = [x for x in fx if x.startswith("burn-") and x.endswith(".mp4")]      # blue/white light leaks
+    films = [x for x in fx if x.startswith("film-") and x.endswith(".mp4")]      # warm orange film burns
+    rains = itertools.cycle([x for x in fx if x.startswith("rain-")] or [None])   # falling money on black (screen blend)
+    last_rain = -1e9
+    try:
+        fxmeta = json.load(open(os.path.join(FX_DIR, "fx.json")))   # durations, paired sounds, wipe cover windows
+    except Exception:
+        fxmeta = {}
+    glitches = [x for x in fx if x.startswith("glitch-") and x.endswith(".mp4")] if plan.get("glitch", True) else []
+    gcyc = itertools.cycle(glitches) if glitches else None
+    wipes = [x for x in fx if x.startswith("wipe-") and x.endswith(".webm")]
+    wcyc = itertools.cycle(wipes) if wipes else None
+    wipe_every = plan.get("wipes", 7)                    # a shape wipe on every Nth cut (0 disables)
+    tvs = [x for x in fx if x.startswith("tv-")  and x.endswith(".mp4")]
+    n_flash = 0
+    style = plan.get("burn_style", "mix")                 # "mix" | "leak" | "film"
+    if style == "leak" or not films:
+        burns = leaks
+    elif style == "film" or not leaks:
+        burns = films
+    else:
+        burns = [x for pair in itertools.zip_longest(leaks, films) for x in pair if x]
     burn_every = plan.get("burns", 3)                 # a flash on every Nth cut; 0/false disables
     bcyc = itertools.cycle(burns) if burns else None
     burn_els = []
-    bgs = sorted(x for x in os.listdir(BG_DIR) if x.endswith(".mp4")) if os.path.isdir(BG_DIR) else []
+    allbg = sorted(x for x in os.listdir(BG_DIR) if x.endswith(".mp4")) if os.path.isdir(BG_DIR) else []
+    dark = [x for x in allbg if "-color-" not in x]        # dark grid / topo loops
+    color = [x for x in allbg if "-color-" in x]           # bright coloured grids
+    bstyle = plan.get("backdrops", "all")                  # "all" (alternate) | "dark" | "color"
+    if bstyle == "dark" or not color:
+        bgs = dark or color
+    elif bstyle == "color" or not dark:
+        bgs = color
+    else:
+        bgs = [x for pair in itertools.zip_longest(dark, color) for x in pair if x]
     bgcyc = itertools.cycle(bgs) if bgs else None
     mv = itertools.cycle(MOVES); prev_move = None
     tcycle = itertools.cycle(TRANS)
@@ -163,6 +240,8 @@ def build(slug):
                     if r.get("platform") == "web":      # zoom into the data (infobox side) so the numbers are readable
                         js.append(f'tl.fromTo("#{tid}c img",{{scale:1.0}},{{scale:{s.get("zoom",1.75)},duration:{max(dur-1.5,0.8):.3f},ease:"power2.inOut"}},{t0+0.9:.3f});')
                     sfx_marks.append((s["start"] + 0.05, "pop"))
+                    if r.get("platform") == "web":
+                        sfx_marks.append((t0 + 0.9, "type"))          # keyboard clicks while the camera zooms into the page
                 else:
                     m = s.get("movement") or next(mv)
                     if m == prev_move: m = next(mv)
@@ -177,6 +256,37 @@ def build(slug):
         if k:
             tr = s.get("transition") or ("fade" if kind == "card" else next(tcycle))
             a = s["start"] - T
+            prev_inset = (shots[k - 1].get("layout") == "inset" or reg.get(str(shots[k - 1]["id"]), {}).get("platform") == "web")
+            use_wipe = (wcyc and wipe_every and k % wipe_every == wipe_every // 2 and kind != "card" and tr != "tv"
+                        and not prev_inset and s.get("transition") is None) or (tr == "wipe" and wcyc)
+            fx_sound = None
+            if use_wipe or (tr == "tv" and tvs):
+                # a shape wipe / TV-bars clip covers the frame; hard-cut to this shot in the middle of the covered window
+                ff = next(wcyc) if use_wipe else tvs[k % len(tvs)]
+                m_ = fxmeta.get(ff, {}); fd = m_.get("dur", 1.0)
+                cov = m_.get("cover") or [fd * 0.45, fd * 0.55]
+                ws = s["start"] - (cov[0] + cov[1]) / 2
+                ext = os.path.splitext(ff)[1]
+                shutil.copy(os.path.join(FX_DIR, ff), os.path.join(hf, "media", f"sw{k}{ext}"))
+                burn_els.append(f'<video id="sw{k}" class="clip shapewipe" data-start="{max(ws,0):.3f}" data-duration="{fd:.3f}" data-track-index="4" '
+                                f'data-volume="0" muted playsinline src="media/sw{k}{ext}"></video>')
+                js.append(f'tl.fromTo("#{tid}",{{opacity:0}},{{opacity:1,duration:0.02}},{s["start"]:.3f});')
+                if m_.get("sfx"):
+                    sfx_marks.append((max(ws, 0), "file:" + m_["sfx"]))
+                else:
+                    sfx_marks.append((a + 0.05, "whoosh"))
+                continue
+            if burn_every and (burns or glitches) and k % burn_every == 0:
+                n_flash += 1
+                bf = next(gcyc) if (gcyc and n_flash % 5 == 0) else (next(bcyc) if bcyc else next(gcyc))
+                fd = min(fxmeta.get(bf, {}).get("dur", 0.32), 1.1)
+                shutil.copy(os.path.join(FX_DIR, bf), os.path.join(hf, "media", f"bn{k}.mp4"))
+                bs = max(a + T / 2 - fd / 2, 0.0)                     # flash peak on the cut
+                burn_els.append(f'<video id="bn{k}" class="clip burn" data-start="{bs:.3f}" data-duration="{fd:.3f}" data-track-index="9" '
+                                f'data-volume="0" muted playsinline src="media/bn{k}.mp4"></video>')
+                fx_sound = fxmeta.get(bf, {}).get("sfx")
+                if fx_sound:
+                    sfx_marks.append((bs, "file:" + fx_sound))
             if tr == "push":
                 js.append(f'tl.fromTo("#{tid}",{{x:{W}}},{{x:0,duration:{T},ease:"power3.out"}},{a:.3f});')
             elif tr == "zoomthru":
@@ -185,13 +295,8 @@ def build(slug):
                 js.append(f'tl.fromTo("#{tid}",{{x:{int(W*0.6)},opacity:0.2}},{{x:0,opacity:1,duration:{T},ease:"expo.out"}},{a:.3f});')
             else:
                 js.append(f'tl.fromTo("#{tid}",{{opacity:0}},{{opacity:1,duration:{T},ease:"power1.inOut"}},{a:.3f});')
-            sfx_marks.append((a + 0.05, "impact" if kind == "card" else "whoosh"))
-            if burn_every and burns and k % burn_every == 0:      # light-leak flash centred on this cut
-                bf = next(bcyc); bsrc = os.path.join(FX_DIR, bf)
-                shutil.copy(bsrc, os.path.join(hf, "media", f"bn{k}.mp4"))
-                bs = max(a + T / 2 - 0.16, 0.0)
-                burn_els.append(f'<video id="bn{k}" class="clip burn" data-start="{bs:.3f}" data-duration="0.32" data-track-index="9" '
-                                f'data-volume="0" muted playsinline src="media/bn{k}.mp4"></video>')
+            if not fx_sound:
+                sfx_marks.append((a + 0.05, "impact" if kind == "card" else "whoosh"))
             if kind == "card":  # accent wipe + flash on card entries
                 els.append(f'<div id="wp{sid}" class="clip wipe" data-start="{a-0.05:.3f}" data-duration="{T+0.6:.3f}" data-track-index="8"></div>')
                 js.append(f'tl.fromTo("#wp{sid}",{{xPercent:-105}},{{xPercent:0,duration:0.22,ease:"power3.in"}},{a-0.05:.3f});'
@@ -203,6 +308,8 @@ def build(slug):
         list(ex.map(lambda a: norm_video(*a), vjobs))
 
     # ------------------------------------------------------------------------ overlays on footage
+    if plan.get("icons", True):
+        print(f"[hf_build] {auto_icons(shots, wd['words'], reg, plan.get('icon_gap', 12.0))} stickers placed")
     ov_i = 0
     for s in shots:
         for ov in s.get("overlays", []):
@@ -236,6 +343,14 @@ def build(slug):
                           f'onUpdate:function(){{document.querySelector("#{oid} .v").textContent=Math.round(o.v);}}}},{t0+0.1:.3f});}})();'
                           f'tl.to("#{oid}w",{{opacity:0,y:-20,duration:0.3,ease:"power2.in"}},{t0+d-0.36:.3f});tl.set("#{oid}w",{{opacity:0}},{t0+d-0.05:.3f});')
                 sfx_marks.append((t0 + 0.1, "money" if MONEY_RE.search(f'{ov.get("unit","")} {ov.get("label","")}') else "impact"))
+                sfx_marks.append((t0 + 0.1, "riser"))                # builds up and ends on the number
+                rf = next(rains)
+                if rf and MONEY_RE.search(f'{ov.get("unit","")} {ov.get("label","")}') and t0 - last_rain > 60 and plan.get("money_rain", True):
+                    last_rain = t0; rid = f"rain{ov_i}"
+                    shutil.copy(os.path.join(FX_DIR, rf), os.path.join(hf, "media", f"{rid}.mp4"))
+                    els.insert(len(els) - 1, f'<video id="{rid}" class="clip burn" data-start="{t0:.3f}" data-duration="2.8" data-track-index="5" '
+                               f'data-media-start="1" data-volume="0" muted playsinline src="media/{rid}.mp4"></video>')
+                    js.append(f'tl.fromTo("#{rid}",{{opacity:0}},{{opacity:0.9,duration:0.3}},{t0:.3f});tl.to("#{rid}",{{opacity:0,duration:0.5}},{t0+2.25:.3f});')
             elif typ == "list":
                 items = ov["items"]
                 rows = "".join(f'<div class="li"><i></i>{esc(it["text"])}</div>' for it in items)
@@ -250,6 +365,19 @@ def build(slug):
                     js.append(f'tl.from("#{oid} .li:nth-child({q+2})",{{x:-60,opacity:0,duration:0.34,ease:"power3.out"}},{ti:.3f});')
                 js.append(f'tl.to("#{oid}w",{{opacity:0,x:-30,duration:0.3,ease:"power2.in"}},{t0+d-0.36:.3f});tl.set("#{oid}w",{{opacity:0}},{t0+d-0.05:.3f});')
                 sfx_marks.append((t0, "whoosh"))
+            elif typ == "icon":
+                src = os.path.join(ICON_DIR, ov["file"])
+                if not os.path.exists(src):
+                    continue
+                shutil.copy(src, os.path.join(hf, "media", f"ic_{ov['file']}"))
+                side = "left" if ov_i % 3 == 2 else "right"
+                els.append(f'<div id="{oid}" class="clip ovl" data-start="{t0:.3f}" data-duration="{d:.3f}" data-track-index="{10+ov_i%6}">'
+                           f'<img id="{oid}w" class="icon {side}" src="media/ic_{esc(ov["file"])}" /></div>')
+                rot = -8 if side == "right" else 8
+                js.append(f'tl.fromTo("#{oid}w",{{scale:0,rotation:{rot*3}}},{{scale:1,rotation:{rot},duration:0.45,ease:"back.out(2.4)"}},{t0:.3f});'
+                          f'tl.to("#{oid}w",{{y:-14,rotation:{-rot/2},duration:{max(d-0.8,0.4):.3f},ease:"sine.inOut"}},{t0+0.45:.3f});'
+                          f'tl.to("#{oid}w",{{scale:0,opacity:0,duration:0.25,ease:"back.in(2)"}},{t0+d-0.3:.3f});tl.set("#{oid}w",{{opacity:0}},{t0+d-0.04:.3f});')
+                sfx_marks.append((t0, "money" if any(k in ov["file"] for k in ("money", "cash", "coin")) else "pop"))
             elif typ == "tag":
                 els.append(f'<div id="{oid}" class="clip ovl" data-start="{t0:.3f}" data-duration="{d:.3f}" data-track-index="{10+ov_i%6}">'
                            f'<div id="{oid}w" class="tag" style="left:{ov.get("x",160)}px;top:{ov.get("y",150)}px"><i></i>{esc(ov["text"])}</div></div>')
@@ -290,7 +418,20 @@ def build(slug):
             fams.setdefault(f.split("-")[0], []).append(f)
     cyc = {k: itertools.cycle(v) for k, v in fams.items()}
     chosen = []                                        # (time, family); a money sound beats a nearby whoosh/impact
+    layered, last_riser = [], -1e9                     # type / riser sit under the others, not deduplicated against them
     for t, fam in sorted(sfx_marks):
+        if fam.startswith("file:"):
+            layered.append((t, fam)); continue
+        if fam in ("type", "riser"):
+            if fam not in cyc:
+                continue
+            if fam == "riser":
+                f = next(cyc["riser"]); t = t - wav_len(os.path.join(SFX_DIR, f))
+                if t < 1.0 or t - last_riser < 75:     # rare: at most one build-up every 75 s
+                    continue
+                last_riser = t
+            layered.append((t, fam))
+            continue
         fam = fam if fam in cyc else ("whoosh" if "whoosh" in cyc else None)
         if not fam:
             continue
@@ -299,10 +440,14 @@ def build(slug):
                 chosen[-1] = (t, fam)
             continue
         chosen.append((t, fam))
+    chosen = sorted(chosen + layered)
     for n, (t, fam) in enumerate(chosen, 1):
-        f = next(cyc[fam])
-        shutil.copy(os.path.join(SFX_DIR, f), os.path.join(hf, "audio", f))
-        aud.append(f'<audio id="fx{n}" class="clip" data-start="{max(t,0):.3f}" data-duration="{wav_len(os.path.join(SFX_DIR, f)):.2f}" data-track-index="{21+n%4}" '
+        if fam.startswith("file:"):
+            f = fam[5:]; src_dir = FX_DIR
+        else:
+            f = next(cyc[fam]); src_dir = SFX_DIR
+        shutil.copy(os.path.join(src_dir, f), os.path.join(hf, "audio", f))
+        aud.append(f'<audio id="fx{n}" class="clip" data-start="{max(t,0):.3f}" data-duration="{wav_len(os.path.join(src_dir, f)):.2f}" data-track-index="{ 27 if fam.startswith("file:") else {"riser": 25, "type": 26}.get(fam, 21 + n % 4)}" '
                    f'src="audio/{f}" data-volume="{SFX_VOL.get(f.split("-")[0], 0.30)}"></audio>')
     n = len(chosen)
 
@@ -374,6 +519,7 @@ CSS = """
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:1920px;height:1080px;overflow:hidden;background:#000;font-family:__FT__}
 .media{position:absolute;left:0;top:0;width:1920px;height:1080px;object-fit:cover;transform-origin:50% 35%}
+.shapewipe{position:absolute;left:0;top:0;width:1920px;height:1080px;object-fit:cover;pointer-events:none}
 .burn{position:absolute;left:0;top:0;width:1920px;height:1080px;object-fit:cover;mix-blend-mode:screen;pointer-events:none}
 .imgwrap{position:absolute;inset:0;overflow:hidden;background:#05080f}
 .imgwrap.clear{background:transparent}
@@ -415,6 +561,8 @@ html,body{width:1920px;height:1080px;overflow:hidden;background:#000;font-family
 .stat .r{height:6px;background:__ACC__;margin-top:14px;transform-origin:0 50%}
 .tag{position:absolute;display:flex;align-items:center;gap:16px;padding:16px 34px;border-radius:60px;background:rgba(8,14,26,.85);
   border:3px solid __ACC__;font-family:__FD__;font-weight:900;font-size:46px;color:#fff;letter-spacing:.04em;text-transform:uppercase}
+.icon{position:absolute;top:120px;width:300px;height:300px;object-fit:contain;filter:drop-shadow(0 0 3px rgba(0,0,0,.85)) drop-shadow(0 0 14px rgba(0,0,0,.55)) drop-shadow(0 18px 30px rgba(0,0,0,.5))}
+.icon.right{right:130px}.icon.left{left:130px}
 .tag i{width:18px;height:18px;border-radius:50%;background:__ACC__;box-shadow:0 0 18px __ACC__}
 """
 

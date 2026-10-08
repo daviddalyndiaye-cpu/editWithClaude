@@ -35,14 +35,18 @@ def _probe(path):
     return s.get("width", 0), s.get("height", 0), float((d.get("format") or {}).get("duration") or 0)
 
 
-def yt_candidates(query, min_dur, limit=8):
+def yt_candidates(query, min_dur, limit=8, cc=True):
+    """cc=False (plan "any_license": true) searches all of YouTube; reviews/walkthroughs are then allowed because
+    for a niche subject they are the only footage (talking heads are still rejected frame by frame)."""
     import yt_dlp
-    url = f"https://www.youtube.com/results?search_query={requests.utils.quote(query)}&sp={CC_FILTER}"
+    url = f"https://www.youtube.com/results?search_query={requests.utils.quote(query)}" + (f"&sp={CC_FILTER}" if cc else "")
     with yt_dlp.YoutubeDL({**_yt_base(), "extract_flat": True, "playlistend": limit}) as y:
         info = y.extract_info(url, download=False)
     bad = ("vlog", "reaction", "tiktok", "tutorial", "how to", "explained", "review", "episode", "interview",
            "podcast", "conference", "forum", "unboxing", "tips", "q&a", "live", "lesson", "course", "documentary", "talk", "pakistan", "restores", "restoration", "infoku", "how it works", "making")
     good = ("footage", "b-roll", "broll", "drone", "timelapse", "time-lapse", "4k", "cinematic", "aerial", "stock")
+    if not cc:
+        bad = ("reaction", "tiktok", "podcast", "shorts", "#shorts", "live")
     out = [e for e in (info or {}).get("entries", [])
            if e.get("id") and min_dur + 6 <= (e.get("duration") or 0) <= 3600
            and not any(b in (e.get("title") or "").lower() for b in bad)]
@@ -217,6 +221,76 @@ def openverse_image(query, dest, min_w=900, exclude=None, subject=None):
     return None
 
 
+STOCK_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "library", "stock")
+_STOCK_STOP = {"footage", "broll", "b-roll", "drone", "stock", "video", "clip", "shot", "the", "and", "with", "of", "a", "on", "in"}
+
+
+def local_stock(shot, dest, dur, used_stock):
+    """Fallback: a clip from library/stock whose keywords overlap the shot's searches (stock.json, tools/import_stock.py).
+    Needs >= 2 matching words (or 1 for a one-word query); each library clip is used at most twice per video."""
+    try:
+        idx = json.load(open(os.path.join(STOCK_DIR, "stock.json")))
+    except Exception:
+        return None
+    toks = set()
+    for q in shot.get("queries", []) + [shot.get("must_show") or ""]:
+        toks |= {t for t in re.findall(r"[a-z]+", q.lower()) if len(t) > 2 and t not in _STOCK_STOP}
+    best, score = None, 0
+    for it in idx:
+        if used_stock.get(it["file"], 0) >= 2:
+            continue
+        sc = len(toks & set(it.get("words", [])))
+        if sc > score:
+            best, score = it, sc
+    if not best or score < (1 if len(toks) <= 2 else 2):
+        return None
+    src = os.path.join(STOCK_DIR, best["file"])
+    w, h, d = _probe(src)
+    start = 0.0 if not used_stock.get(best["file"]) else max(0.0, d - dur)      # second use: take the other end
+    subprocess.run(["ffmpeg", "-v", "error", "-y", "-ss", f"{start:.2f}", "-i", src, "-t", f"{dur:.2f}", "-c", "copy", dest], check=True)
+    used_stock[best["file"]] = used_stock.get(best["file"], 0) + 1
+    return {"platform": "library", "title": best["file"], "kind": "video", "from": start, "to": start + dur, "query": " ".join(sorted(toks))[:80]}
+
+
+def web_image(query, dest, subject=None, exclude=None, min_w=1000):
+    """Any-license photo from a web image search (plan "any_license": true). Landscape, >= min_w px,
+    and the result title must name the subject."""
+    from PIL import Image
+    import html as _h
+    try:
+        r = requests.get("https://www.bing.com/images/search", params={"q": query, "qft": "+filterui:imagesize-large", "form": "IRFLTR"},
+                         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"}, timeout=30)
+    except Exception:
+        return None
+    subj = (subject or "").lower().split(" ")[0]
+    for m in re.finditer(r'm="(\{[^"]+\})"', r.text):
+        try:
+            meta = json.loads(_h.unescape(m.group(1)))
+        except Exception:
+            continue
+        url, title, page = meta.get("murl"), meta.get("t") or "", meta.get("purl") or ""
+        if not url or (exclude and url in exclude):
+            continue
+        if subj and subj not in (title + " " + page + " " + url).lower():
+            continue
+        try:
+            b = requests.get(url, timeout=25, headers={"User-Agent": "Mozilla/5.0"})
+            if b.status_code != 200 or len(b.content) < 40000:
+                continue
+            import io as _io
+            with Image.open(_io.BytesIO(b.content)) as im:       # decode in memory: no open file handle on Windows
+                w, h = im.size
+                if w < min_w or w / max(h, 1) < 1.2:
+                    continue
+                im.convert("RGB").save(dest, "JPEG", quality=92)
+        except Exception:
+            if os.path.exists(dest):
+                os.remove(dest)
+            continue
+        return {"title": title[:120], "url": url, "page": page, "author": page.split("/")[2] if page.count("/") > 2 else "", "license": "unknown (any-license mode)"}
+    return None
+
+
 def fetch(slug, redo=None):
     root = os.path.join("projects", slug)
     plan = json.load(open(os.path.join(root, "plan.json"), encoding="utf-8"))
@@ -235,8 +309,13 @@ def fetch(slug, redo=None):
             used.setdefault(s["id"], []).append((s["from"], s["to"]))
 
     used_photos = {v.get("url") for v in reg.values() if v.get("kind") == "image"}
+    used_stock = {}
+    for v in reg.values():
+        if v.get("platform") == "library":
+            used_stock[v["title"]] = used_stock.get(v["title"], 0) + 1
     subj_word = (plan.get("subject") or "").strip().lower().split(" ")[0]
     photo_every = plan.get("photo_every", 3)
+    any_lic = plan.get("any_license", False)
 
     for si, shot in enumerate(plan["shots"]):
         sid = str(shot["id"])
@@ -274,6 +353,8 @@ def fetch(slug, redo=None):
                 dest = os.path.join(media, f"shot_{sid}.jpg")
                 meta = None; plat = "openverse"
                 meta = openverse_image(q, dest, exclude=used_photos, subject=plan.get("subject"))
+                if not meta and any_lic:
+                    meta = web_image(q, dest, subject=plan.get("subject"), exclude=used_photos); plat = "web-image"
                 if not meta:
                     try:
                         meta = wiki_image(q, dest); plat = "wikimedia"
@@ -312,7 +393,7 @@ def fetch(slug, redo=None):
             print(f"[fetch] shot {sid}: yt '{q}'")
             time.sleep(4.0)                                   # YouTube throttles fast search bursts (returns empty lists)
             try:
-                cands = yt_candidates(q, dur)
+                cands = yt_candidates(q, dur, cc=not (any_lic and subj_word and subj_word in q.lower()))
             except Exception as e:
                 print("   search failed:", str(e)[:80]); continue
             _marine = re.compile(r"(yacht|boat|trawler|ship|marina|harbou?r|sail|ocean|sea|cruis|vessel|shipyard|explorer)", re.I)
@@ -333,7 +414,7 @@ def fetch(slug, redo=None):
                         info = yt_download(vid, dest, start, dur)
                     except Exception as e:
                         print("   download failed:", str(e)[:70]); break
-                    if "creative commons" not in (info.get("license") or "").lower():
+                    if "creative commons" not in (info.get("license") or "").lower() and not any_lic:
                         os.remove(dest); break
                     w, h, d = _probe(dest)
                     if h < 700 or w / max(h, 1) < 1.5 or d < dur - 1:
@@ -364,6 +445,20 @@ def fetch(slug, redo=None):
                     print(f"   OK wiki {meta['title']}")
                     done = True
                     break
+        if not done and any_lic and subj_word and any(subj_word in q.lower() for q in shot.get("queries", [])):
+            for q in [x for x in shot.get("queries", []) if subj_word in x.lower()]:
+                dest = os.path.join(media, f"shot_{sid}.jpg")
+                meta = web_image(q, dest, subject=plan.get("subject"), exclude=used_photos)
+                if meta:
+                    used_photos.add(meta["url"])
+                    reg[sid] = {"platform": "web-image", **meta, "file": f"media/shot_{sid}.jpg", "from": 0, "to": 0, "kind": "image", "query": q}
+                    print(f"[fetch] shot {sid}: web photo '{q}' -> {meta['title'][:50]}"); done = True
+                    break
+        if not done:
+            meta = local_stock(shot, os.path.join(media, f"shot_{sid}.mp4"), dur, used_stock)
+            if meta:
+                reg[sid] = {**meta, "file": f"media/shot_{sid}.mp4"}
+                print(f"[fetch] shot {sid}: library clip {meta['title']}"); done = True
         if not done:
             print(f"[fetch] shot {sid}: NOTHING FOUND -> will render as card")
             reg[sid] = {"platform": "none", "file": None, "kind": "card", "from": 0, "to": 0}

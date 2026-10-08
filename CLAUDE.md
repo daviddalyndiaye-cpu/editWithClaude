@@ -11,7 +11,10 @@ Voice-over in → edited faceless video out. Web app: `start_app.ps1` → http:/
 
 ## What the renderer does by default
 - Jump-cut zooms inside each video shot (wide ↔ punched-in every ~3.5 s); Ken-Burns on photos; screenshot cards pop in over looping grid/topo backdrops then zoom into the data.
-- Light-leak flash (`library/fx/burn-XX.mp4`, screen blend) on every 3rd cut (`plan.burns`, 0 disables). Whoosh/impact on cuts, **cha-ching** (`library/sfx/money-*.wav`) on money count-ups.
+- Flash on every 3rd cut (`plan.burns`, 0 disables), screen blend: blue light leaks `fx/burn-*` + orange film burns `fx/film-*`, alternating (`plan.burn_style`: mix/leak/film). Whoosh/impact on cuts, **cha-ching** + falling **money rain** (`fx/rain-*`, max 1/min) on money count-ups, a **riser** building into big stats (max 1 per 75 s), paper **pop** on stickers/cards, **keyboard typing** while a website card zooms.
+- **Stickers**: `library/icons/*.png` pop in top-right when the narrator says a trigger word from `icons.json` (max 1 per 12 s, never over another overlay or on screenshot cards). Plan keys: `icons` (false disables), `icon_gap`. Weak match? Edit the trigger words in `tools/import_icons.py` MAP and re-import.
+- Backdrops behind website cards alternate dark loops and bright colour grids (`plan.backdrops`: all/dark/color).
+- **Local stock fallback**: when CC YouTube/Wikimedia/Openverse find nothing for a shot, `fetch.local_stock` takes a `library/stock` clip whose keywords overlap the queries (≥2 words; ≤2 uses per clip). Mostly finance/business/social-media/tech b-roll, so it only helps those topics.
 - Overlays: lower_third, stat (count-up, number must be spoken), tag, list. Plan `"captions": false` by default.
 
 ## Hard rules / pitfalls (each one cost hours)
@@ -26,12 +29,16 @@ Voice-over in → edited faceless video out. Web app: `start_app.ps1` → http:/
 - PowerShell edits of `job.json` add a BOM — edit with Python. Python heredocs mangle `\b`/`\n` escapes: build regex strings with `chr(92)` or write files with the editor tool.
 - Drive shared files hit "too many users" download limits — ask the user to download in the browser and give local paths. Many pack assets are vertical (not usable for 16:9).
 
+- **Niche brands (lesson from the Elling video, 2026-10-08)**: free/CC footage of a specific brand usually does not exist and generic YouTube search returns ~40-60% junk (presenters, subtitles, slides, wrong brand). What works: plan `"any_license": true` (user's choice), then (1) collect real brand photos via the browser image search (Bing `/images/async`, skip stock-watermark sites) into `projects/<slug>/pool/`, review a contact sheet, assign by narration line; (2) download 3-5 real brand videos WHOLE (walkthroughs, launch/test films, magazine reviews), make 3-8 s frame strips, and hand-cut exact moments onto lines (see `projects/dutch-boatbuilder/cut_capsize.py`); verify the first/last *rendered* frames of every cut (presenters appear within 1 s of a cut). Technical lines (propellers, tanks, couplings) -> hand-picked reference photos, not video search.
+- Never edit `sources.json` while a fetch runs (it rewrites it from memory). `fetch <ids>` also fetches every shot that has no entry yet.
+
 ## Setup & assets
 - First run on a new PC: `setup.ps1` (Python 3.12, FFmpeg, Node, `.venv`, `npm install` → HyperFrames in `./node_modules`, headless Chrome). Then `.env` (GEMINI_API_KEY) and `cookies.txt`. Verify with `python -m studio.preflight`.
+- New asset pack? Use `tools/import_icons.py`, `tools/import_burns.py`, `tools/import_stock.py` (they skip vertical/green-screen files), then LOOK at a contact sheet of the result and delete junk. Packs from the user's Drive are kept raw in `library/_incoming/` (git-ignored). Drive download: list folders via `https://drive.google.com/embeddedfolderview?id=<id>` and fetch `https://drive.usercontent.google.com/download?id=<id>&export=download&confirm=t` (4 at a time).
 - `library/` is NOT in git (licensed packs). Expected names: `library/sfx/{whoosh,impact,pop,money}-*.wav`, `library/fx/burn-*.mp4` (0.3 s flashes on black), `library/bg/bg*-*.mp4` (16:9 dark loops). See `library/README.md`. Missing folders only disable those effects.
 
 ## Credits
 Every external clip/photo is recorded in `sources.json` → `CREDITS.md` (CC-BY needs credit in the video description). Mention it when delivering.
 
 ## Next improvements (agreed backlog)
-"Your images" upload (user photos/AI images placed on matching lines) · skip punch-in on slide-like clips · fewer transitions + occasional accent wipe · pointer callouts, quote/timeline/bar-chart overlays · extra SFX from the 71-file pack · more transparent-video overlays.
+Counting-number pack (Drive folder not shared yet) · "Your images" upload (user photos/AI images placed on matching lines) · skip punch-in on slide-like clips · fewer transitions + occasional accent wipe · pointer callouts, quote/timeline/bar-chart overlays · extra SFX from the 71-file pack · more transparent-video overlays.

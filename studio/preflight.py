@@ -21,7 +21,7 @@ def run():
         err.append("HyperFrames is not installed - run 'npm install' in the repo folder (setup.ps1 does it).")
     if not glob.glob(os.path.expanduser(r"~\.cache\hyperframes\chrome\chrome-headless-shell\*\*\chrome-headless-shell.exe")):
         err.append("Chrome Headless Shell for rendering is missing (npx hyperframes browser ensure).")
-    for need in ("fx", "sfx", "bg"):
+    for need in ("fx", "sfx", "bg", "icons", "stock"):
         if not glob.glob(os.path.join(root, "library", need, "*")):
             warn.append(f"library/{need} is empty - some effects will be skipped.")
     try:
