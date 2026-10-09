@@ -13,3 +13,4 @@ opencv-python-headless==4.10.0.84
 numpy<2.3
 # legacy FFmpeg pipeline (main.py)
 open-clip-torch
+cryptography>=42

@@ -14,6 +14,12 @@ Write-Host " community, is prohibited and may lead to legal action. Full terms: 
 Write-Host "================================================================================" -ForegroundColor Red
 $ok = Read-Host "Type I AGREE to accept the license and continue"
 if ($ok -ne "I AGREE") { Write-Host "License not accepted - setup stopped." -ForegroundColor Red; exit 1 }
+if (-not (Test-Path "yta-license.key")) {
+  $lf = Read-Host "Path to your personal YTA Expert licence file (the .key file you received)"
+  $lf = $lf.Trim('"')
+  if (-not (Test-Path $lf)) { Write-Host "Licence file not found - setup stopped. Ask David Daly Ndiaye for your licence file." -ForegroundColor Red; exit 1 }
+  Copy-Item $lf "yta-license.key"
+}
 
 Write-Host "== 1/5 System tools (Python 3.12, FFmpeg, Node.js)" -ForegroundColor Cyan
 if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")) {
@@ -40,3 +46,7 @@ Write-Host "== 5/5 Check" -ForegroundColor Cyan
 $env:PYTHONPATH = (Get-Location).Path
 .\.venv\Scripts\python.exe -m studio.preflight
 Write-Host "Done. Start the app with:  powershell -ExecutionPolicy Bypass -File start_app.ps1   then open http://localhost:8765" -ForegroundColor Green
+
+Write-Host "== Licence check" -ForegroundColor Cyan
+.\.venv\Scripts\python.exe yta_license.py check
+if ($LASTEXITCODE -ne 0) { Write-Host "Invalid licence - the tool will not run. Ask David Daly Ndiaye for your licence file." -ForegroundColor Red; exit 1 }
