@@ -1,5 +1,7 @@
 # Auto B-Roll Studio
 
+> **LICENSE NOTICE — READ BEFORE INSTALLING.** This tool is proprietary software by **David Daly Ndiaye**, licensed **only to active members of the YTA Expert community, for their own personal use**. It is not open source. Reselling it, or sharing the repository, code, templates or styles with anyone outside the YTA Expert community, is prohibited and may lead to legal action. See [LICENSE](LICENSE).
+
 Turn a **voice-over** into an edited faceless YouTube video: real B-roll footage and photos matched to what's being said, jump-cut zooms, light-leak transitions, animated text overlays timed to the speech, sound effects, and website-screenshot cards. Built to be driven by **Claude Code**.
 
 Pipeline: transcribe (WhisperX) → shot plan (Gemini, or Claude in a session) → find footage (Creative-Commons YouTube, Wikimedia, Openverse photos) → **review** → compose (HyperFrames HTML/GSAP) → render in parts → join.

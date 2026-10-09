@@ -5,6 +5,16 @@ Set-Location $PSScriptRoot
 function Has($cmd) { return [bool](Get-Command $cmd -ErrorAction SilentlyContinue) }
 function RefreshPath { $env:Path = [Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [Environment]::GetEnvironmentVariable("Path","User") }
 
+Write-Host ""
+Write-Host "================================ LICENSE NOTICE ================================" -ForegroundColor Red
+Write-Host " Auto B-Roll Studio (c) David Daly Ndiaye. Proprietary software, NOT open source." -ForegroundColor Yellow
+Write-Host " Licensed ONLY to active members of the YTA Expert community, for personal use." -ForegroundColor Yellow
+Write-Host " Reselling it, or sharing the repository / code / templates outside the YTA Expert" -ForegroundColor Yellow
+Write-Host " community, is prohibited and may lead to legal action. Full terms: LICENSE" -ForegroundColor Yellow
+Write-Host "================================================================================" -ForegroundColor Red
+$ok = Read-Host "Type I AGREE to accept the license and continue"
+if ($ok -ne "I AGREE") { Write-Host "License not accepted - setup stopped." -ForegroundColor Red; exit 1 }
+
 Write-Host "== 1/5 System tools (Python 3.12, FFmpeg, Node.js)" -ForegroundColor Cyan
 if (-not (Test-Path "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe")) {
   winget install --id Python.Python.3.12 -e --source winget --accept-package-agreements --accept-source-agreements }
