@@ -34,3 +34,7 @@ hf_probe/
 # YTA licences: your personal file and issued files never go in git
 yta-license.key
 licenses/issued/
+
+# private house style SIGNAL - stays on this computer only
+studio/motion_signal.py
+studio/motion_signal2.py

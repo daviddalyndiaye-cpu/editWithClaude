@@ -116,12 +116,48 @@ def norm_video(src, dst):
     """Closed-GOP, 1080p30, no audio: the renderer seeks frame-exactly only with dense keyframes."""
     if os.path.exists(dst) and os.path.getmtime(dst) >= os.path.getmtime(src):
         return
+    # HDR (HLG/PQ, BT.2020) sources make HyperFrames switch the whole part to 10-bit HDR, which then breaks the
+    # stream-copy join (88 s of green in a test video). Tone-map every HDR clip to SDR BT.709 here.
+    tr = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=color_transfer",
+                         "-of", "csv=p=0", src], capture_output=True, text=True).stdout.strip().strip(",")
+    hdr = tr in ("arib-std-b67", "smpte2084")
+    tm = ("zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,"
+          "zscale=t=bt709:m=bt709:r=tv,format=yuv420p,") if hdr else ""
     r = subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", src, "-an",
-                        "-vf", "fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
+                        "-vf", tm + "fps=30,scale=1920:1080:force_original_aspect_ratio=increase,crop=1920:1080",
                         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                        "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709",
                         "-g", "30", "-keyint_min", "30", "-sc_threshold", "0", "-movflags", "+faststart", dst])
     if r.returncode:
         raise RuntimeError(f"ffmpeg failed on {src}")
+
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _resolve(path, root):
+    """Template asset path: absolute, repo-relative ("projects/x/pool/a.jpg") or "media:<shot id>" (that shot's file)."""
+    if path.startswith("media:"):
+        main = re.sub(r"_p\d+$", "", root)                     # parts only know their own shots
+        for base in (root, main):
+            reg = json.load(open(os.path.join(base, "sources.json"), encoding="utf-8"))
+            if path[6:] in reg:
+                return os.path.join(base, reg[path[6:]]["file"])
+        raise KeyError(path)
+    return path if os.path.isabs(path) else os.path.join(REPO, path)
+
+
+def _motion_css(mctx):
+    if not mctx:
+        return ""
+    from studio import motion as M
+    th = mctx.theme
+    fdir = os.path.join(mctx.hf, "fonts"); os.makedirs(fdir, exist_ok=True)
+    for f in os.listdir(M.FONTS):
+        shutil.copy(os.path.join(M.FONTS, f), fdir)
+    faces = "".join(f"@font-face{{font-family:'{f}';src:url('fonts/{p}');font-weight:{w}}}" for f, p, w in th.get("faces", []))
+    body = M.CSS[M.CSS.index(".vig2"):]          # skip the reset/body rules, keep every template style
+    return M.font_css() + faces + body.replace("__Y__", mctx.accent) + th["css"].replace("__A__", mctx.accent)
 
 
 def wav_len(path):
@@ -194,6 +230,13 @@ def build(slug):
     bgcyc = itertools.cycle(bgs) if bgs else None
     mv = itertools.cycle(MOVES); prev_move = None
     tcycle = itertools.cycle(TRANS)
+    # motion-design templates (studio/motion.py, plan "theme"): full-screen template shots + overlays on footage
+    mctx = None
+    if plan.get("motion"):
+        sys.path.insert(0, REPO)
+        from studio import motion as M
+        mctx = M.Ctx(hf, theme=plan.get("theme"))
+    cuts_only = plan.get("cuts_only", False)          # clean cuts; light leaks are the only transition effect
     # ----------------------------------------------------------------------------- shots
     for k, s in enumerate(shots):
         sid = s["id"]; r = reg.get(str(sid), {})
@@ -252,6 +295,17 @@ def build(slug):
         else:
             els.append(card_html(tid, s, cs, dur, trk))
             js.extend(card_js(tid, s, s["start"], s["end"] - s["start"], words))
+        if mctx and s.get("template"):
+            tp = dict(s["template"]); fn = getattr(M, tp.pop("type"))
+            for key in ("img", "img_a", "img_b", "left", "right", "bg", "map_img"):
+                if isinstance(tp.get(key), str):
+                    tp[key] = _resolve(tp[key], root)
+            if isinstance(tp.get("imgs"), list):
+                tp["imgs"] = [_resolve(x, root) for x in tp["imgs"]]
+            if isinstance(tp.get("labels"), list):
+                tp["labels"] = [tuple(x) for x in tp["labels"]]
+            fn(mctx, s["start"], s["end"] - s["start"] + 0.05, **tp)
+            sfx_marks.append((s["start"] + 0.2, "pop"))
         # transition into this shot
         if k:
             tr = s.get("transition") or ("fade" if kind == "card" else next(tcycle))
@@ -287,7 +341,9 @@ def build(slug):
                 fx_sound = fxmeta.get(bf, {}).get("sfx")
                 if fx_sound:
                     sfx_marks.append((bs, "file:" + fx_sound))
-            if tr == "push":
+            if cuts_only:
+                js.append(f'tl.set("#{tid}",{{opacity:0}},{cs:.3f});tl.set("#{tid}",{{opacity:1}},{s["start"]:.3f});')
+            elif tr == "push":
                 js.append(f'tl.fromTo("#{tid}",{{x:{W}}},{{x:0,duration:{T},ease:"power3.out"}},{a:.3f});')
             elif tr == "zoomthru":
                 js.append(f'tl.fromTo("#{tid}",{{opacity:0}},{{opacity:1,duration:{T},ease:"power2.out"}},{a:.3f});')
@@ -295,7 +351,7 @@ def build(slug):
                 js.append(f'tl.fromTo("#{tid}",{{x:{int(W*0.6)},opacity:0.2}},{{x:0,opacity:1,duration:{T},ease:"expo.out"}},{a:.3f});')
             else:
                 js.append(f'tl.fromTo("#{tid}",{{opacity:0}},{{opacity:1,duration:{T},ease:"power1.inOut"}},{a:.3f});')
-            if not fx_sound:
+            if not fx_sound and not cuts_only:
                 sfx_marks.append((a + 0.05, "impact" if kind == "card" else "whoosh"))
             if kind == "card":  # accent wipe + flash on card entries
                 els.append(f'<div id="wp{sid}" class="clip wipe" data-start="{a-0.05:.3f}" data-duration="{T+0.6:.3f}" data-track-index="8"></div>')
@@ -323,6 +379,35 @@ def build(slug):
                 continue
             oid = f"ov{ov_i}"
             typ = ov["type"]
+            if mctx:
+                mt = {"lower_third": "lower", "stat": "plate", "tag": "pill"}.get(typ, typ)
+                lead = {"plate": 0.6, "bigstat": 1.0, "highlight": 1.0, "typewriter": 0.5, "spaced": 0.3}.get(mt, 0.15)
+                ts = max(t0 - lead, s["start"]); dd = min(d + lead + 0.4, s["end"] - ts)
+                if mt == "lower":
+                    M.lower_third(mctx, ts, dd, ov.get("kicker", ""), ov["text"]); sfx_marks.append((t0, "whoosh"))
+                elif mt == "plate":
+                    unit = ov.get("unit", "")
+                    M.price_plate(mctx, ts, dd, None, ov["value"], ov.get("label", ""), prefix="$" if "$" in unit else "",
+                                  suffix=unit.replace("$", "").strip())
+                    money = MONEY_RE.search(f'{unit} {ov.get("label","")}')
+                    sfx_marks.append((t0 + 0.1, "money" if money else "impact")); sfx_marks.append((t0 + 0.1, "riser"))
+                elif mt == "bigstat":
+                    M.big_stat_roll(mctx, ts, dd, None, ov["value"], ov.get("word", ov.get("label", "")).upper()); sfx_marks.append((t0, "impact"))
+                elif mt == "pill":
+                    M.pill(mctx, ts, dd, ov["text"]); sfx_marks.append((t0, "pop"))
+                elif mt == "list":
+                    times = [words.find(it["at_word"], ts, s["end"]) or None for it in ov["items"]] if all(it.get("at_word") for it in ov["items"]) else None
+                    if times and None in times:
+                        times = None
+                    M.list_panel(mctx, ts, dd, ov.get("kicker", ""), [it["text"] for it in ov["items"]], times); sfx_marks.append((t0, "whoosh"))
+                elif mt == "highlight":
+                    M.highlight_box(mctx, ts, dd, None, ov["text"], y=ov.get("y", 430)); sfx_marks.append((t0, "pop"))
+                elif mt == "typewriter":
+                    M.typewriter_highlight(mctx, ts, dd, None, ov["text"], x=ov.get("x", 640), y=ov.get("y", 470), width=ov.get("width", 1100))
+                    sfx_marks.append((t0, "type"))
+                elif mt == "spaced":
+                    M.spaced_title(mctx, ts, dd, None, ov["text"], y=ov.get("y", 260))
+                continue
             if typ == "lower_third":
                 els.append(f'<div id="{oid}" class="clip ovl" data-start="{t0:.3f}" data-duration="{d:.3f}" data-track-index="{10+ov_i%6}">'
                            f'<div id="{oid}w" class="lt"><div class="bar"></div><div class="tx"><div class="k">{esc(ov.get("kicker",""))}</div>'
@@ -334,13 +419,14 @@ def build(slug):
                 sfx_marks.append((t0, "whoosh"))
             elif typ == "stat":
                 tgt = ov["value"]
+                dec = len(str(tgt).split(".")[1].rstrip("0")) if "." in str(tgt) else 0     # 0.85 must not show as "1"
                 els.append(f'<div id="{oid}" class="clip ovl" data-start="{t0:.3f}" data-duration="{d:.3f}" data-track-index="{10+ov_i%6}">'
                            f'<div id="{oid}w" class="stat"><div class="n"><span class="v">0</span><span class="u">{esc(ov.get("unit",""))}</span></div>'
                            f'<div class="l">{esc(ov["label"])}</div><div class="r"></div></div></div>')
                 js.append(f'tl.from("#{oid}w",{{y:-40,opacity:0,duration:0.35,ease:"back.out(1.6)"}},{t0:.3f});'
                           f'tl.from("#{oid} .r",{{scaleX:0,duration:0.45,ease:"power3.out"}},{t0+0.1:.3f});'
                           f'(function(){{const o={{v:0}};tl.to(o,{{v:{tgt},duration:0.9,ease:"power2.out",'
-                          f'onUpdate:function(){{document.querySelector("#{oid} .v").textContent=Math.round(o.v);}}}},{t0+0.1:.3f});}})();'
+                          f'onUpdate:function(){{document.querySelector("#{oid} .v").textContent=o.v.toFixed({dec});}}}},{t0+0.1:.3f});}})();'
                           f'tl.to("#{oid}w",{{opacity:0,y:-20,duration:0.3,ease:"power2.in"}},{t0+d-0.36:.3f});tl.set("#{oid}w",{{opacity:0}},{t0+d-0.05:.3f});')
                 sfx_marks.append((t0 + 0.1, "money" if MONEY_RE.search(f'{ov.get("unit","")} {ov.get("label","")}') else "impact"))
                 sfx_marks.append((t0 + 0.1, "riser"))                # builds up and ends on the number
@@ -451,12 +537,14 @@ def build(slug):
                    f'src="audio/{f}" data-volume="{SFX_VOL.get(f.split("-")[0], 0.30)}"></audio>')
     n = len(chosen)
 
+    if mctx:
+        els.extend(mctx.els); js.extend(mctx.js)
     css = CSS.replace("__ACC__", da["accent"]).replace("__BG__", da["background"]).replace("__TX__", da["text"]) \
              .replace("__FD__", FONT_DISPLAY).replace("__FT__", FONT_TEXT)
     page = f"""<!doctype html>
 <html lang="en"><head><meta charset="UTF-8" /><meta name="viewport" content="width={W}, height={H}" />
 <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
-<style>{css}</style></head>
+<style>{css}{_motion_css(mctx)}</style></head>
 <body>
 <div id="root" data-composition-id="main" data-start="0" data-duration="{total:.3f}" data-width="{W}" data-height="{H}">
 {chr(10).join(els)}

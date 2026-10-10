@@ -307,7 +307,7 @@ def s_render(j):
                       detail=f"part {k}/{parts}: {what.strip()} {fr}".strip())
         stage(j, "render", status="running", detail=f"part {k}/{parts}: starting")
         with open(rlog, "w", encoding="utf-8") as lf:
-            p = subprocess.Popen([npx, "--prefix", HF_PREFIX, "hyperframes", "render", "-o", os.path.join(out, "part.mp4"), "-q", "draft"],
+            p = subprocess.Popen([npx, "--prefix", HF_PREFIX, "hyperframes", "render", "-o", os.path.join(out, "part.mp4"), "-q", "draft", "--sdr"],
                                  cwd=hf, env=env(), stdout=lf, stderr=subprocess.STDOUT, creationflags=0x08000000)
         RT[j["id"]]["proc"] = p
         while p.poll() is None:
@@ -327,6 +327,19 @@ def s_join(j):
     open(lst, "w", encoding="ascii").write("\n".join(
         "file '" + os.path.join(PROJ, f"{j['slug']}_p{k}", "out", "part.mp4").replace("\\", "/") + "'" for k in range(1, parts + 1)))
     final = os.path.join(out_dir, f"{j['slug']}.mp4")
+    # every part must share codec/bit depth for the stream-copy join; re-encode any odd one out (e.g. an HDR part)
+    for k in range(1, parts + 1):
+        pp = os.path.join(PROJ, f"{j['slug']}_p{k}", "out", "part.mp4")
+        info = subprocess.run(["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,pix_fmt",
+                               "-of", "csv=p=0", pp], capture_output=True, text=True, env=env()).stdout.strip()
+        if info and info != "h264,yuv420p":
+            log(j, f"[join] part {k} is {info}; converting to 8-bit H.264")
+            tmp = pp[:-4] + "_sdr.mp4"
+            run_proc(j, ["ffmpeg", "-y", "-v", "error", "-i", pp, "-vf",
+                         "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p",
+                         "-c:v", "libx264", "-profile:v", "baseline", "-crf", "18", "-preset", "fast", "-r", "30",
+                         "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-c:a", "copy", tmp])
+            os.replace(tmp, pp)
     if run_proc(j, ["ffmpeg", "-y", "-v", "error", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", final]) or not os.path.exists(final):
         raise RuntimeError("Joining parts failed")
     j["video"] = f"{j['slug']}/out/{j['slug']}.mp4"
